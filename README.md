@@ -7,7 +7,14 @@ A companion tool for Asian Americans for Equality's annual gala. It sits on top 
 
 **Status:** this is the stable build (v1.0) as of November 2, 2026, built and tested on invented data only. It is handed to AAFE on November 10, 2026.
 
-Built by team ERIMX BOKHUS (Pursuit AI Native Fellowship): Natalie Walker, Aisling Leiva-Davila, Cornell Robertson and Antonin Lesov. Shared with AAFE and its technical partners for the handoff.
+Built by team ERIMX BOKHUS (Pursuit AI Native Fellowship):
+
+- **Natalie Walker**, product lead: product, design, the apps' front end, and AAFE's point of contact
+- **Aisling Leiva-Davila**, technical lead: backend, integrations, the repository and releases
+- **Cornell Robertson**, backend: staff sign-in
+- **Antonin Lesov**, frontend and UI/UX: the sponsor portal
+
+Shared with AAFE and its technical partners for the handoff.
 
 ## Documents
 
