@@ -1,0 +1,54 @@
+{
+  "name": "aafe-gala-apps",
+  "private": true,
+  "engines": {
+    "node": ">=22.18"
+  },
+  "workspaces": [
+    "guest-portal",
+    "staff-app",
+    "checkin-app"
+  ],
+  "scripts": {
+    "seed": "python3 database/generate_seed.py && python3 database/generate_full_seed.py",
+    "dev:guest": "npm run dev -w guest-portal",
+    "dev:staff": "npm run dev -w staff-app",
+    "build": "npm run build -w guest-portal && npm run build -w staff-app && npm run build -w checkin-app",
+    "test:backend": "node scripts/test-backend.mjs && node scripts/test-access.mjs && node scripts/test-sql-standard.mjs && node scripts/test-upgrades.mjs && node scripts/test-emails.mjs && node scripts/test-audit.mjs && node scripts/test-offline-checkin.mjs && node scripts/test-pipeline.mjs && node scripts/test-arrivals.mjs && node scripts/test-gala-event.mjs && node scripts/test-gala-2026.mjs && node scripts/test-display-name.mjs && node scripts/test-demo-data.mjs && node scripts/test-demo-drift.mjs && node scripts/test-givelively.mts && node scripts/test-givelively-sync.mts && node scripts/test-audit-fixes.mjs && node scripts/test-levels.mjs && node scripts/test-community-tickets.mjs && node scripts/test-reports.mjs && node scripts/test-needs-totals.mts && node scripts/test-guest-contacts.mts && node scripts/test-sync.mjs && node scripts/test-door-sync.mjs && node scripts/test-money.mjs && node scripts/test-void-payment.mjs && node scripts/test-givelively-2027.mjs && node scripts/test-import-excel.mjs && node scripts/test-salesforce.mts",
+    "db:backend": "supabase db query --linked -f database/backend.sql",
+    "db:advisors": "supabase db advisors --linked --type all",
+    "test": "vitest run",
+    "translations": "node scripts/translation-sheet.mts",
+    "db:load": "node scripts/load-demo-data.mjs",
+    "db:drift": "node scripts/demo-drift.mjs",
+    "email:local": "node scripts/setup-email-local.mjs",
+    "db:local": "node scripts/load-local-db.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.109.0",
+    "jsqr": "^1.4.0",
+    "lucide-react": "^0.460.0",
+    "qrcode": "^1.5.4",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/react": "^16.3.3",
+    "@types/qrcode": "^1.5.5",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "autoprefixer": "^10.4.20",
+    "jsdom": "^29.1.1",
+    "postcss": "^8.4.49",
+    "supabase": "2.121.0",
+    "tailwindcss": "^3.4.17",
+    "typescript": "~5.6.3",
+    "vite": "^6.0.0",
+    "vite-plugin-singlefile": "^2.3.3",
+    "vitest": "^5.0.3"
+  },
+  "type": "module"
+}

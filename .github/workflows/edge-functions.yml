@@ -1,0 +1,32 @@
+name: Server function type-check
+
+# Type-checks the Supabase Edge Functions (Give Lively sync, email sender, mock) with Deno,
+# the runtime they deploy to. No keys needed: it only compiles them, it doesn't run them.
+on:
+  # Every pull request, so it can be a required check on main. No run after each merge into main: the pull request
+  # already tested it.
+  pull_request:
+
+# A newer push to the same pull request cancels the older run still in progress (saves Actions minutes).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  edge-functions-check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: prototype
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      # --node-modules-dir=none: Deno fetches the npm packages the functions import (npm:@supabase/supabase-js,
+      # npm:qrcode) into its own cache. Not "auto", which installs all of package.json into node_modules by version
+      # range, ignoring package-lock.json: harmless here, but on a laptop it changed the apps' React and Vite.
+      - run: deno check --node-modules-dir=none supabase/functions/*/index.ts

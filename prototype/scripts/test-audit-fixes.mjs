@@ -1,0 +1,206 @@
+// Fixes from the Oct 12 audit, each set up with what the demo data lacks: a second gala, a deadline already
+// passed, a partial refund. Runs with npm run test:backend. Invented data only.
+import { counter, openTestDb } from './test-db.mjs'
+import { deadlinePassed } from '../supabase/functions/_shared/emails.ts'
+import { retry } from '../supabase/functions/_shared/retry.ts'
+import { classify } from '../supabase/functions/_shared/givelively.ts'
+import { CANCELLED_STATUS } from '../../import-engine/src/index.ts'
+const { db, as, err } = await openTestDb()
+const count = counter(), ok = count.ok
+const q = async (sql, params) => (await db.query(sql, params)).rows
+const one = async (sql, params) => (await q(sql, params))[0]
+const ADMIN = 'mei.ortiz@aafe-demo.example.org', RM = 'daniel.seo@aafe-demo.example.org'
+const current = async () => (await one(`select current_event_id() id`)).id
+
+// ---- The current gala: next year's gala in planning doesn't take over this year's
+ok(await current() === 'ev-2027', 'the demo gala is current')
+await db.exec(`insert into gala_events (id, year, name, event_date, guest_list_deadline, status) values ('ev-2028', 2028, 'AAFE Gala 2028 (test)', '2028-05-18', '2028-04-20', 'planning')`)
+ok(await current() === 'ev-2027', "creating next year's gala in planning leaves this year's current")
+await db.exec(`update gala_events set status = 'live' where id = 'ev-2028'`)
+ok(await current() === 'ev-2028', 'a gala marked live is current')
+await db.exec(`update gala_events set status = 'planning' where id = 'ev-2028'; update gala_events set status = 'closed' where id = 'ev-2027'`)
+ok(await current() === 'ev-2028', "once this year's gala is closed, next year's is current")
+await db.exec(`update gala_events set status = 'planning' where id = 'ev-2027'; delete from gala_events where id = 'ev-2028'`)
+ok(await current() === 'ev-2027', 'and back')
+// Just after the gala (never marked live, not closed yet): it stays current for 30 days, then next year's takes over.
+const { d: d2027 } = await one(`select event_date::text d from gala_events where id = 'ev-2027'`)
+await db.exec(`insert into gala_events (id, year, name, event_date, guest_list_deadline, status) values ('ev-2028', 2028, 'AAFE Gala 2028 (test)', (now() at time zone 'America/New_York')::date + 360, (now() at time zone 'America/New_York')::date + 330, 'planning')`)
+await db.exec(`update gala_events set event_date = (now() at time zone 'America/New_York')::date - 5 where id = 'ev-2027'`)
+ok(await current() === 'ev-2027', "5 days after this year's gala, it's still current, not next year's in planning")
+await db.exec(`update gala_events set event_date = (now() at time zone 'America/New_York')::date - 40 where id = 'ev-2027'`)
+ok(await current() === 'ev-2028', "40 days after (and never closed), next year's gala becomes current")
+await db.query(`update gala_events set event_date = $1 where id = 'ev-2027'`, [d2027]); await db.exec(`delete from gala_events where id = 'ev-2028'`)
+ok(await current() === 'ev-2027', 'and back again')
+
+// ---- A late purchase: no link that would arrive expired; staff extend that one order's deadline
+const order = (await one(`select id from orders where event_id = current_event_id() and status <> 'cancelled' and source <> 'givelively' order by id limit 1`)).id
+await db.query(`update orders set guest_list_deadline = (now() at time zone 'America/New_York')::date - 3 where id = $1`, [order])
+const draft = (await one(`select enqueue_email('portal_link', 'late.buyer@example.org', 'Late Buyer', $1, null, 'staff') id`, [order])).id
+  ?? (await one(`select id from email_log where order_id = $1 and template = 'portal_link' and approved_at is null order by id desc limit 1`, [order])).id
+ok(/deadline .* has passed/.test(await err('authenticated', ADMIN, `select staff_approve_email($1)`, [draft]) ?? ''), "a link for an order whose deadline has passed can't be approved")
+ok(/forbidden/.test(await err('authenticated', RM, `select staff_set_order_deadline($1, (now() at time zone 'America/New_York')::date + 10)`, [order]) ?? ''), 'only a gala admin moves one order\'s deadline')
+ok(/after the gala/.test(await err('authenticated', ADMIN, `select staff_set_order_deadline($1, '2027-06-30')`, [order]) ?? ''), "the deadline can't be after the gala")
+await db.query(`update orders set portal_token = 'abc123' where id = $1`, [order])
+await as('authenticated', ADMIN, `select staff_set_order_deadline($1, (now() at time zone 'America/New_York')::date + 10)`, [order])
+const o = await one(`select guest_list_deadline::text dl, portal_token_expires_at = (((now() at time zone 'America/New_York')::date + 11)::timestamp at time zone 'America/New_York') moved from orders where id = $1`, [order])
+ok(o.moved, 'a link already sent moves with the new deadline')
+ok((await one(`select count(*)::int n from audit_log where action = 'order.deadline_changed' and entity_id = $1`, [order])).n === 1, 'the change is logged')
+ok((await err('authenticated', ADMIN, `select staff_approve_email($1)`, [draft])) === null, 'then the link can be approved')
+ok(deadlinePassed('2026-10-01', new Date('2026-10-02T03:59:00Z')) === false && deadlinePassed('2026-10-01', new Date('2026-10-02T04:01:00Z')) === true,
+  'the sender counts a deadline day as over at midnight New York time')
+ok(deadlinePassed(null) === false, 'no deadline is never passed')
+
+// ---- Refunds: a partial refund keeps the order; a full one cancels it
+const row = (txn, over) => ({ txn, email: `${txn.toLowerCase()}@audit.example.org`, date: '2026-10-06T15:04:00Z', first: 'Robin', last: 'Audit', company: '',
+  campaign: 'AAFE Gala 2027', tier_id: 'community_ticket', ticket_level: 'Community Ticket', method: 'Credit Card', status: 'succeeded',
+  quantity: 2, original: 500, gross: 500, fee: 11.3, net: 488.7, refunded: 0, ...over })
+const imp = async (r) => (await as('service_role', null, `select gl_import($1::jsonb, 'audit test') r`, [JSON.stringify([r])]))[0].r
+const state = async (txn) => one(`select o.status, (select count(*)::int from seats s where s.order_id = o.id and s.status <> 'cancelled') open_seats
+  from payments p join orders o on o.id = p.order_id where p.givelively_transaction_id = $1`, [txn])
+await imp(row('GL-AUDIT-PARTIAL', { status: 'Partially Refunded', refunded: 250 }))
+const partial = await state('GL-AUDIT-PARTIAL')
+ok(partial.status === 'partially_paid' && partial.open_seats === 2, `"Partially Refunded" keeps the order and its seats (${JSON.stringify(partial)})`)
+await imp(row('GL-AUDIT-FULL', { status: 'Refunded', refunded: 0 }))
+ok((await state('GL-AUDIT-FULL')).status === 'cancelled', '"Refunded" on its own still cancels')
+await imp(row('GL-AUDIT-AMOUNT', { refunded: 500 }))
+ok((await state('GL-AUDIT-AMOUNT')).status === 'cancelled', 'a full refund by amount still cancels')
+
+// ---- One set of failure words: the CSV upload, the sync and gl_import agree (Cornell's #109 review)
+const STATUSES = ['Failed', 'Declined', 'Cancelled', 'Voided', 'Reversed', 'ACH Returned', 'Payment failed', 'Succeeded', 'Completed', 'Pending', 'Partially Refunded']
+const disagree = []
+for (const [i, status] of STATUSES.entries()) {
+  const csv = CANCELLED_STATUS.test(status)
+  const sync = classify({ txn: 'GL-X', email: 'x@example.org', gross: 100, original: 100, campaign: 'AAFE Gala 2027', status }, ['AAFE Gala 2027']) === 'failed'
+  await imp(row(`GL-WORDS-${i}`, { status }))
+  const sql = (await state(`GL-WORDS-${i}`)).status === 'cancelled'
+  if (csv !== sync || csv !== sql) disagree.push(`${status}: csv ${csv}, sync ${sync}, gl_import ${sql}`)
+}
+ok(disagree.length === 0, `the CSV upload, the sync and gl_import cancel on the same statuses ${disagree.join('; ')}`)
+ok(CANCELLED_STATUS.test('Declined') && CANCELLED_STATUS.test('ACH Returned'), 'a declined or returned payment is cancelled by the CSV upload too')
+// A full refund: the CSV path and gl_import cancel; the sync hands it to gl_import as an import (it isn't a failed payment).
+for (const [i, status] of ['Refunded', 'Fully Refunded', 'Refund'].entries()) {
+  const sync = classify({ txn: 'GL-X', email: 'x@example.org', gross: 100, original: 100, campaign: 'AAFE Gala 2027', status }, ['AAFE Gala 2027'])
+  await imp(row(`GL-REFUND-${i}`, { status }))
+  const sql = (await state(`GL-REFUND-${i}`)).status === 'cancelled'
+  ok(CANCELLED_STATUS.test(status) && sql && sync === 'import', `"${status}": the CSV upload and gl_import cancel, the sync passes it to gl_import (classify says ${sync})`)
+}
+
+// ---- The email sender's save is retried, not counted as a failed send
+let tries = 0
+ok(await retry(async () => { if (++tries < 3) throw new Error('db blip'); return 'saved' }, [1, 1, 1]) === 'saved' && tries === 3, 'a save that fails twice is retried until it works')
+tries = 0
+ok(await retry(async () => { tries++; throw new Error('db down') }, [1, 1]).then(() => false, (e) => e.message === 'db down') && tries === 3, 'and gives up with the last error')
+
+// ---- Saving a guest again in the portal (Oct 12 audit, Cornell): only a real change to the badge undoes staff's review
+// Its own link: an earlier check in this file replaces Acme's.
+const LINK = 'resave-test-link'
+await db.query(`update orders set portal_token = hash_token($1), portal_token_expires_at = now() + interval '30 days' where id = 'ord-acme'`, [LINK])
+const portalSave = async (slot, g) => (await as('anon', null, `select portal_save_guest($1, $2, $3) v`, [LINK, slot, g]))[0].v
+const freeSlot = (await as('anon', null, `select portal_get_view($1) v`, [LINK]))[0].v.seats.find((x) => x.status === 'unnamed').slot
+const guest = { first_name: 'Robin', last_name: 'Resave', title: 'Director', organization: 'Resave Partners', email: 'robin.resave@example.org', dietary_needs: '', accessibility_needs: '' }
+await portalSave(freeSlot, guest)
+const gid = (await one(`select g.id from guests g join seats s on s.guest_id = g.id join orders o on o.id = s.order_id where o.id = 'ord-acme' and s.slot_number = $1`, [freeSlot])).id
+await db.query(`update seats set status = 'reviewed' where guest_id = $1`, [gid]); await db.query(`update guests set badge_status = 'printed' where id = $1`, [gid])
+const stateOf = async () => one(`select g.badge_status b, s.status st, (select count(*)::int from audit_log a where a.entity_id = g.id) logs
+  from guests g join seats s on s.guest_id = g.id where g.id = $1`, [gid])
+const reviewed = await stateOf()
+await portalSave(freeSlot, guest)
+ok(JSON.stringify(await stateOf()) === JSON.stringify(reviewed), `saving the same guest again changes nothing: badge stays printed, seat stays reviewed, nothing logged (${JSON.stringify(await stateOf())})`)
+await portalSave(freeSlot, { ...guest, title: ' Director ', dietary_needs: null })
+ok(JSON.stringify(await stateOf()) === JSON.stringify(reviewed), 'blank and missing, or extra spaces, are not a change')
+await portalSave(freeSlot, { ...guest, dietary_needs: 'Vegetarian' })
+const afterFood = await stateOf()
+ok(afterFood.b === 'printed' && afterFood.st === 'reviewed' && afterFood.logs === reviewed.logs + 1, `a food answer is saved and logged without undoing the review (${JSON.stringify(afterFood)})`)
+ok((await one(`select dietary_needs d from guests where id = $1`, [gid])).d === 'Vegetarian', 'and the food answer is stored')
+await portalSave(freeSlot, { ...guest, dietary_needs: 'Vegetarian', title: 'Executive Director' })
+const afterTitle = await stateOf()
+ok(afterTitle.b === 'reprint_needed' && afterTitle.st === 'submitted', `a new title on a printed badge needs a reprint and a new review (${JSON.stringify(afterTitle)})`)
+await db.query(`update seats set status = 'reviewed' where guest_id = $1`, [gid]); await db.query(`update guests set badge_status = 'ready' where id = $1`, [gid])
+await portalSave(freeSlot, { ...guest, dietary_needs: 'Vegetarian', title: 'Executive Director', organization: 'Resave Group' })
+const afterOrg = await stateOf()
+ok(afterOrg.b === 'needs_review' && afterOrg.st === 'submitted', 'a new organization on an unprinted badge goes back to review')
+await as('anon', null, `select portal_release_seat($1, $2)`, [LINK, freeSlot])
+
+// ---- A repeat buyer with a two-word last name stays one sponsor (Oct 12 audit, Cornell)
+const ANA = 'ana.garcia.lopez@audit.example.org'
+const sponsorsOf = async (email) => (await one(`select count(*)::int n from sponsors where lower(primary_contact_email) = $1`, [email])).n
+const conflicts = async (email) => (await one(`select count(*)::int n from import_review where reason = 'email_name_conflict' and order_id in
+  (select o.id from orders o join sponsors s on s.id = o.sponsor_id where lower(s.primary_contact_email) = $1)`, [email])).n
+await imp(row('GL-AUDIT-ANA-1', { email: ANA, first: 'Ana', last: 'García López' }))
+await imp(row('GL-AUDIT-ANA-2', { email: ANA, first: 'Ana', last: 'García López', date: '2026-10-07T15:04:00Z' }))
+ok(await sponsorsOf(ANA) === 1 && await conflicts(ANA) === 0, `a second purchase by "Ana García López" joins her sponsor, with no shared-inbox review (${await sponsorsOf(ANA)} sponsors)`)
+await imp(row('GL-AUDIT-ANA-3', { email: ANA, first: 'Mark', last: 'Lee', date: '2026-10-08T15:04:00Z' }))
+ok(await sponsorsOf(ANA) === 2 && await conflicts(ANA) === 1, 'a different family on the same inbox is still a shared inbox: a new sponsor and a review')
+
+// ---- A $0 purchase goes to staff, not silently dropped (Oct 12 audit, Cornell)
+{
+  const ordersBefore = (await one(`select count(*)::int n from orders`)).n
+  const zero = row('GL-AUDIT-ZERO', { email: 'zero.ticket@audit.example.org', first: 'Zed', last: 'Zero', gross: 0, original: 0, fee: 0, net: 0,
+    ticket_level: 'Comp Ticket', quantity: 2, guest_text: 'Zed Zero; Zoe Zero' })
+  const r1 = await imp(zero)
+  ok(r1.zero_amount === 1 && r1.created === 0 && r1.skipped === 0 && r1.review_items === 1, `a $0 purchase is counted on its own, not as already imported (${JSON.stringify(r1)})`)
+  ok((await one(`select count(*)::int n from orders`)).n === ordersBefore, 'and nothing is created for it')
+  const item = await one(`select details from import_review where reason = 'zero_amount' and details ->> 'email' = 'zero.ticket@audit.example.org'`)
+  ok(item?.details.buyer === 'Zed Zero' && item.details.tier_purchased === 'Comp Ticket' && item.details.guest_text === 'Zed Zero; Zoe Zero',
+    'staff get a review item with the buyer, ticket type and guest list')
+  const r2 = await imp(zero)
+  ok(r2.zero_amount === 1 && r2.review_items === 0 && (await one(`select count(*)::int n from import_review where reason = 'zero_amount' and details ->> 'email' = 'zero.ticket@audit.example.org'`)).n === 1,
+    'uploading the same row again adds no second item')
+  ok((await err('authenticated', RM, `select staff_resolve_import_review((select id from import_review where reason = 'zero_amount' limit 1), 'Added as comps')`)) === null,
+    'a relationship manager can close it like any review item')
+}
+
+// ---- A new display name voids the guest's QR e-ticket, like a new first or last name (Oct 12 audit, Cornell)
+{
+  const seat = await one(`select s.id, s.guest_id from seats s where s.qr_token_hash is not null and s.guest_id is not null limit 1`)
+  const voids = async () => (await one(`select count(*)::int n from audit_log where action = 'qr.voided' and entity_id = $1`, [seat.id])).n
+  const hash = async () => (await one(`select qr_token_hash h from seats where id = $1`, [seat.id])).h
+  await db.query(`update guests set display_name = display_name where id = $1`, [seat.guest_id])
+  ok(await hash() !== null && await voids() === 0, 'saving the same display name leaves the QR code working')
+  await db.query(`update guests set display_name = null where id = $1`, [seat.guest_id])
+  await db.query(`update guests set display_name = btrim(concat_ws(' ', first_name, last_name)) where id = $1`, [seat.guest_id])
+  ok(await hash() !== null && await voids() === 0, 'clearing it, or filling a blank one in as "First Last", is not a new name')
+  await db.query(`update guests set display_name = 'Someone Else Entirely' where id = $1`, [seat.guest_id])
+  ok(await hash() === null && await voids() === 1, 'a new display name voids the QR code, and the change log says so')
+}
+
+// ---- Two comp guests added at once can't take the same slot (Oct 12 audit, Cornell). The test database runs one
+// connection, so it can't add two at the same instant: it checks the function waits its turn (a per-gala lock), and
+// that adds in a row get their own slots on one comp order.
+{
+  const src = (await one(`select string_agg(prosrc, ' ') src from pg_proc where proname = 'staff_add_comp_guest'`)).src   // the public wrapper and the private body
+  ok(/pg_advisory_xact_lock\(hashtext\('staff_add_comp_guest'\), hashtext\(current_event_id\(\)\)\)/.test(src), 'adding a comp guest waits for any other add on this gala to finish')
+  const compOrders = async () => (await one(`select count(*)::int n from orders o join sponsorship_tiers t on t.id = o.tier_id
+    where o.event_id = current_event_id() and o.status <> 'cancelled' and t.tier_category = 'complimentary'`)).n
+  const before = await compOrders()
+  const ids = []
+  for (const n of ['One', 'Two', 'Three']) ids.push((await as('authenticated', RM, `select staff_add_comp_guest($1) id`, [{ first_name: 'Comp', last_name: n }]))[0].id)
+  const slots = (await q(`select s.order_id, s.slot_number from seats s where s.guest_id = any($1) order by s.slot_number`, [ids]))
+  ok(new Set(slots.map((x) => x.order_id)).size === 1 && new Set(slots.map((x) => x.slot_number)).size === 3 && await compOrders() === Math.max(before, 1),
+    `three comp guests in a row: one comp order, three different slots (${JSON.stringify(slots.map((x) => x.slot_number))})`)
+
+  // ---- A relationship guest goes to the comp order that holds relationship guests, never to the staff or volunteer
+  // one (found checking AAFE's Oct 20 walk-through). The demo sets have five comp orders created at the same moment,
+  // and "the earliest" picked among them by how the rows were stored. Here a staff comp order is the earliest outright.
+  const relOrder = slots[0].order_id
+  const orderOf = async (id) => (await one(`select order_id from guests where id = $1`, [id])).order_id
+  await db.query(`insert into orders (id, event_id, sponsor_id, tier_id, source, commitment_amount, status, internal_notes, created_at)
+    select 'ord-test-staff-early', current_event_id(), (select id from sponsors order by id limit 1),
+           (select id from sponsorship_tiers where event_id = current_event_id() and tier_category = 'complimentary' order by id limit 1),
+           'comp', 0, 'comp', 'AAFE staff attending the gala.', (select min(created_at) from orders) - interval '1 day'`)
+  const four = (await as('authenticated', RM, `select staff_add_comp_guest($1) id`, [{ first_name: 'Comp', last_name: 'Four' }]))[0].id
+  ok(await orderOf(four) === relOrder, `with an older staff comp order there, a relationship guest still joins the others (${await orderOf(four)})`)
+  // With no order holding relationship guests (here: theirs cancelled), it gets its own order, not the staff one.
+  const was = (await one(`select status from orders where id = $1`, [relOrder])).status
+  await db.query(`update orders set status = 'cancelled' where id = $1`, [relOrder])
+  const five = (await as('authenticated', RM, `select staff_add_comp_guest($1) id`, [{ first_name: 'Comp', last_name: 'Five' }]))[0].id
+  const own = await one(`select o.id, o.internal_notes from orders o where o.id = $1`, [await orderOf(five)])
+  ok(own.id !== 'ord-test-staff-early' && own.id !== relOrder && own.internal_notes.startsWith('Complimentary relationship guests'),
+    `with none, a new relationship-guest order is made (${own.id}), not the staff one`)
+  const six = (await as('authenticated', RM, `select staff_add_comp_guest($1) id`, [{ first_name: 'Comp', last_name: 'Six' }]))[0].id
+  ok(await orderOf(six) === own.id, 'and the next relationship guest joins that order')
+  await db.query(`update orders set status = $2 where id = $1`, [relOrder, was])
+}
+
+console.log(`audit fixes: ${count.pass} passed, ${count.fail} failed`)
+if (count.fail) process.exitCode = 1

@@ -1,0 +1,19 @@
+project_id = "aafe-gala"
+
+# These functions check their own callers (cron secret or staff role), so the
+# gateway's JWT check is off. See _shared/supabase.ts -> caller().
+[functions.givelively-sync]
+verify_jwt = false
+
+[functions.send-emails]
+verify_jwt = false
+
+[functions.givelively-mock]
+verify_jwt = false
+
+[functions.salesforce-push]
+verify_jwt = false
+
+# Demo only: checks the SALESFORCE_TOKEN bearer itself, like a Salesforce org.
+[functions.salesforce-mock]
+verify_jwt = false

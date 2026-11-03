@@ -1,0 +1,31 @@
+name: Import engine tests
+
+on:
+  # Every pull request (no path filter) so it can be a required check on main; a path filter would leave PRs that
+  # don't touch these folders waiting forever. No run after each merge into main: the pull request already tested it.
+  pull_request:
+
+# A newer push to the same pull request cancels the older run still in progress (saves Actions minutes).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  import-engine-tests:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: import-engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: import-engine/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
