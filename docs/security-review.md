@@ -1,8 +1,5 @@
 # Security review (v1.0)
 
-© 2026 ERIMX BOKHUS team, all rights reserved, licensing to be decided with AAFE and Pursuit.
-
-
 October 15, 2026, updated through Oct 22. Reviewed against the code at 627fcbd, the prototype's Supabase project and
 the built apps: each area, what was checked, what it found, and the test or fix that proves it.
 

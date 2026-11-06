@@ -1,8 +1,5 @@
 # Running the tool: free-plan limits, backups, gala night
 
-© 2026 ERIMX BOKHUS team, all rights reserved, licensing to be decided with AAFE and Pursuit.
-
-
 The prototype runs on free plans: Supabase, Cloudflare
 Pages and Access, a team Gmail account that sends the sign-in codes, and Resend, which sends the app's emails. This page lists what could stop it, how to
 prevent each thing and how to recover, how to take and restore a backup, and a checklist for gala night. Limits read from the providers' pages on Oct 17, 2026 (sources at the end).

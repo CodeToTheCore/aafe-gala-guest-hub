@@ -1,8 +1,5 @@
 # Guest data and AI handling (draft for AAFE)
 
-© 2026 ERIMX BOKHUS team, all rights reserved, licensing to be decided with AAFE and Pursuit.
-
-
 Kept next to the code, so the code can be checked against it.
 
 ## Commitments

@@ -1,8 +1,5 @@
 # Keys and secrets
 
-© 2026 ERIMX BOKHUS team, all rights reserved, licensing to be decided with AAFE and Pursuit.
-
-
 Every key the project uses, what it can do, where it lives, and how to replace it. The rule: secrets never in code. The rule of thumb: **a key that can bypass the database's access rules lives only in Supabase's encrypted secret store and never on a laptop or in a browser.**
 
 ## Where each key lives

@@ -1,18 +1,17 @@
 # AAFE Gala Guest List Tool: start here
 
-© 2026 ERIMX BOKHUS team, all rights reserved, licensing to be decided with AAFE and Pursuit.
-
-
 A companion tool for Asian Americans for Equality's annual gala. It sits on top of Give Lively and turns ticket purchases, sponsorship pledges, checks and direct deposits, and comps into one complete, editable guest list. It adds a private sponsor portal where sponsors name their guests, a staff workspace, badge exports, and gala-night check-in on iPads.
 
 **Status:** this is the stable build (v1.0) as of November 2, 2026, built and tested on invented data only. It is handed to AAFE on November 10, 2026.
 
 Built by team ERIMX BOKHUS (Pursuit AI Native Fellowship):
 
-- **Natalie Walker**, product lead: product, design, the apps' front end, and AAFE's point of contact
-- **Aisling Leiva-Davila**, technical lead: backend, integrations, the repository and releases
-- **Cornell Robertson**, backend: staff sign-in
-- **Antonin Lesov**, frontend and UI/UX: the sponsor portal
+- **Natalie Walker**, Product lead · UI/UX lead: product, design, the apps' front end, the staff app and the iPad check-in app, and AAFE's point of contact
+- **Aisling Leiva-Davila**, Technical director: backend, integrations, the repository and releases
+- **Antonin Lesov**, Frontend · UI/UX: the sponsor portal
+- **Cornell Robertson**, Backend developer: staff sign-in and roles, voiding payments, the email worker, and audit fixes
+
+The tool started from Natalie Walker's prototype and seed data (Oct 2–3, 2026), which the team adopted as its stack on Oct 5.
 
 Shared with AAFE and its technical partners for the handoff.
 
